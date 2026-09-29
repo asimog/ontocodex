@@ -9,6 +9,11 @@ contains no mandatory predefined modality sequence.**
 ResearchProgram → ResearchPortfolio → ResearchQuestion → Campaign → OntoCodex
 ```
 
+Production OntoCodex is an adapter over upstream `codex exec`. It receives only a bounded typed
+projection, runs outside the source checkout with read-only/no-web policy, and returns one
+schema-constrained `ResearchDecision`. Python verifies that decision against the current durable
+state and exact offers. Deterministic OntoCodex implements the same boundary for offline tests.
+
 ## Scientific Engine
 
 ```text

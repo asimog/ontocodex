@@ -125,11 +125,25 @@ class ResearchRun(Contract):
     run_id: UUID = Field(default_factory=new_id)
     campaign_id: UUID | None = None
     decision_kind: str
+    ontocodex_invocation_id: UUID | None = None
     status: RunStatus = RunStatus.PENDING
     started_at: datetime | None = None
     finished_at: datetime | None = None
     outcome_ref: UUID | None = None
     error: str | None = None
+
+
+class OntoCodexInvocation(Contract):
+    invocation_id: UUID = Field(default_factory=new_id)
+    director_version: str
+    codex_cli_version: str | None
+    provider: str
+    model: str
+    configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    input_projection_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    output_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    decision_kind: str
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Capability(Contract):

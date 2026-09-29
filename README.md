@@ -31,3 +31,14 @@ uv run ontojev run --root .ontojev --max-runs 1
 uv run ontojev status --root .ontojev
 ```
 
+The default director remains deterministic so offline development and CI never incur provider
+calls. To exercise the M1 scientific-director boundary, configure `OPENROUTER_API_KEY` outside
+the repository and run:
+
+```bash
+uv run ontojev run --root .ontojev --max-runs 1 --director codex
+```
+
+This invokes upstream Codex CLI in an isolated temporary directory using the configured
+OpenRouter model. Python still validates the typed decision before any ResearchRun begins.
+

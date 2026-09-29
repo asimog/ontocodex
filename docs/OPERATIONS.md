@@ -10,5 +10,20 @@ outcome. At startup, abandoned `RUNNING` records become `INTERRUPTED`; the sched
 fresh offers from durable state rather than trusting stale decisions.
 
 Corrupt or missing referenced artifacts stop progression. Unregistered files are ignored.
-Live model, Jev, provider, network, and paid-service calls are absent from the bootstrap.
+Default operation and CI make no live model, Jev, provider, network, or paid-service calls.
+
+## OntoCodex
+
+`--director codex` is opt-in. It requires upstream Codex CLI and `OPENROUTER_API_KEY`; the key is
+read from the process environment and is never persisted. Defaults are provider `openrouter`,
+model `deepseek/deepseek-v4.1-flash`, and a 120-second invocation timeout. Override the executable,
+model, or timeout with `ONTOCODEX_EXECUTABLE`, `ONTOCODEX_MODEL`, and
+`ONTOCODEX_TIMEOUT_SECONDS`.
+
+Each invocation uses a fresh `CODEX_HOME` and empty temporary working directory. Its config pins
+read-only sandboxing, no approvals, disabled web search, the Responses wire API, and the provider
+environment-key name. Durable records retain CLI/director versions, provider, model, safe config
+hash, bounded projection hash, output hash, and decision kind. Provider secrets and raw prompts
+are not retained. Failures occur before ResearchRun creation; malformed or stale decisions never
+reach execution.
 

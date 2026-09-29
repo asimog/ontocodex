@@ -12,8 +12,10 @@ from ontojev.domain.models import (
     Campaign,
     Capability,
     CapabilityOffer,
+    OntoCodexInvocation,
     QuestionStatus,
     ResearchQuestion,
+    ResearchRun,
     ScientificEvidence,
 )
 from ontojev.runtime.scheduler import Scheduler
@@ -80,6 +82,7 @@ def test_two_restart_evidence_neutral_lifecycle_reaches_next_question(tmp_path: 
         "evidence": 4,
         "candidates": 1,
         "dossiers": 1,
+        "ontocodex_invocations": 13,
     }
     repository = Repository(tmp_path)
     questions = repository.list_latest("question", ResearchQuestion)
@@ -96,6 +99,10 @@ def test_two_restart_evidence_neutral_lifecycle_reaches_next_question(tmp_path: 
         "bootstrap.categorical-profile.v1",
         "bootstrap.follow-up.v1",
     }
+    runs = repository.list_latest("research_run", ResearchRun)
+    invocations = repository.list_latest("ontocodex_invocation", OntoCodexInvocation)
+    assert all(run.ontocodex_invocation_id is not None for run in runs)
+    assert {item.provider for item in invocations} == {"deterministic"}
 
 
 def test_corrupt_evidence_blocks_scientific_composition(tmp_path: Path) -> None:

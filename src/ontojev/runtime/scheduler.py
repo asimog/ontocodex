@@ -28,6 +28,7 @@ from ontojev.domain.models import (
     ExecuteFollowUpDecision,
     FinalizeCandidateDecision,
     InvestigateCandidateDecision,
+    OntoCodexInvocation,
     Provenance,
     ProvenanceCategory,
     QuestionStatus,
@@ -46,7 +47,12 @@ from ontojev.domain.models import (
 )
 from ontojev.dossier.renderer import DossierRenderer
 from ontojev.jev.evaluators import DeepEvaluator, WideEvaluator
-from ontojev.ontocodex.director import Director, DirectorContext
+from ontojev.ontocodex.director import (
+    DeterministicDirector,
+    Director,
+    DirectorContext,
+    validate_decision,
+)
 from ontojev.runtime.supervisor import BoundedExecutor, CapabilityTimeout, RuntimeLimits
 from ontojev.science.composition import Composer
 from ontojev.storage.repository import Repository
@@ -67,7 +73,7 @@ class Scheduler:
     ) -> None:
         self.repository = Repository(root)
         self.registry = registry or bootstrap_registry()
-        self.director = director or Director()
+        self.director = director or DeterministicDirector()
         self.limits = limits or RuntimeLimits()
         self.executor = BoundedExecutor(self.limits)
         self.composer = Composer()
@@ -98,7 +104,7 @@ class Scheduler:
     def recover(self) -> int:
         return self.repository.recover_running_runs()
 
-    def _context(self) -> DirectorContext:
+    def current_context(self) -> DirectorContext:
         program, portfolio = self.initialize()
         questions = tuple(
             item
@@ -188,11 +194,15 @@ class Scheduler:
 
     def step(self) -> ResearchRun:
         self.recover()
-        context = self._context()
+        context = self.current_context()
         decision = self.director.decide(context)
+        validate_decision(decision, context)
+        invocation = self.director.last_invocation
+        self.repository.save("ontocodex_invocation", invocation.invocation_id, invocation)
         run = ResearchRun(
             campaign_id=context.campaign.campaign_id if context.campaign else None,
             decision_kind=decision.kind,
+            ontocodex_invocation_id=invocation.invocation_id,
             status=RunStatus.RUNNING,
             started_at=utc_now(),
         )
@@ -451,4 +461,7 @@ class Scheduler:
             "evidence": len(self.repository.list_latest("evidence", ScientificEvidence)),
             "candidates": len(self.repository.list_latest("candidate", Candidate)),
             "dossiers": len(self.repository.list_latest("dossier", DossierMetadata)),
+            "ontocodex_invocations": len(
+                self.repository.list_latest("ontocodex_invocation", OntoCodexInvocation)
+            ),
         }
