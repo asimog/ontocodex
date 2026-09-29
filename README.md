@@ -20,7 +20,7 @@ Python 3.12 and `uv` are required.
 uv sync --locked --extra dev
 uv run ruff format --check .
 uv run ruff check .
-uv run mypy src tests
+uv run mypy ontojev tests
 uv run pytest
 ```
 

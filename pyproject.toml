@@ -17,7 +17,7 @@ dev = ["mypy>=1.15,<3", "pytest>=8.4,<9", "pytest-timeout>=2.4,<3", "ruff>=0.12,
 ontojev = "ontojev.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ontojev"]
+packages = ["ontojev"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -33,5 +33,5 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src", "tests"]
+files = ["ontojev", "tests"]
 

@@ -62,7 +62,7 @@
 
 ## Source Layout
 
-- Place packages under `src/ontojev/`.
+- Place packages under the top-level `ontojev/` directory.
 - Put stable contracts in `domain/`.
 - Put scientific meaning in `science/`.
 - Put executable wrappers in `capabilities/`.
@@ -90,7 +90,7 @@
 
 - Run `uv run ruff format --check .`.
 - Run `uv run ruff check .`.
-- Run `uv run mypy src tests` in strict mode.
+- Run `uv run mypy ontojev tests` in strict mode.
 - Run `uv run pytest` offline.
 - Linux CI is authoritative.
 - Live calls remain opt-in and absent from default CI.
