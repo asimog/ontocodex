@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable
-from typing import Literal, Protocol
+from pathlib import Path
+from typing import Literal, Protocol, cast
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -15,6 +17,9 @@ from ontojev.domain.models import (
     CapabilityResult,
     Completeness,
     ScientificEvidence,
+    ScientificScope,
+    SourceRole,
+    SourceSnapshot,
 )
 from ontojev.storage.repository import canonical_json
 
@@ -61,6 +66,16 @@ class ExecutableCapability(Protocol):
     result_model: type[ResultContract]
 
     def execute(self, offer: CapabilityOffer) -> ResultContract: ...
+
+
+def _supports(capability: ExecutableCapability, campaign: Campaign) -> bool:
+    predicate = getattr(capability, "supports", None)
+    return True if predicate is None else bool(predicate(campaign))
+
+
+def evidence_scope(capability: ExecutableCapability, campaign: Campaign) -> ScientificScope:
+    resolver = getattr(capability, "evidence_scope", None)
+    return campaign.scope if resolver is None else cast(ScientificScope, resolver(campaign))
 
 
 def _offer_digest(
@@ -112,6 +127,8 @@ class CapabilityRegistry:
             definition = self._capabilities[capability_id].definition
             if definition.supported_phase != phase:
                 continue
+            if not _supports(self._capabilities[capability_id], campaign):
+                continue
             if definition.evidence_type_produced in existing_types:
                 continue
             if not set(definition.prerequisites).issubset(existing_types):
@@ -124,7 +141,8 @@ class CapabilityRegistry:
                     campaign_id=campaign.campaign_id,
                     scope_id=campaign.scope.scope_id,
                     phase=phase,
-                    input_refs=tuple(item.evidence_id for item in evidence_items),
+                    input_refs=tuple(item.evidence_id for item in evidence_items)
+                    + tuple(UUID(item) for item in input_refs),
                     offer_digest=digest,
                 )
             )
@@ -147,7 +165,9 @@ class CapabilityRegistry:
         existing_types = {item.evidence_type for item in evidence_items}
         bound_refs = tuple(str(item.evidence_id) for item in evidence_items) + input_refs
         expected = _offer_digest(definition, campaign, phase, bound_refs)
-        expected_input_refs = tuple(item.evidence_id for item in evidence_items)
+        expected_input_refs = tuple(item.evidence_id for item in evidence_items) + tuple(
+            UUID(item) for item in input_refs
+        )
         if (
             offer.campaign_id != campaign.campaign_id
             or offer.scope_id != campaign.scope.scope_id
@@ -156,6 +176,7 @@ class CapabilityRegistry:
             or offer.capability_version != definition.version
             or offer.offer_digest != expected
             or definition.supported_phase != phase
+            or not _supports(capability, campaign)
             or definition.evidence_type_produced in existing_types
             or not set(definition.prerequisites).issubset(existing_types)
         ):
@@ -283,4 +304,140 @@ def bootstrap_registry(*, include_third: bool = True) -> CapabilityRegistry:
     if include_third:
         registry.register(CategoricalProfileCapability())
     registry.register(FollowUpCapability())
+    return registry
+
+
+class FeaturePrevalence(ResultContract):
+    feature: str
+    observed: int = Field(ge=0)
+    altered: int = Field(ge=0)
+    missing: int = Field(ge=0)
+    prevalence: float | None = Field(default=None, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def preserve_undefined_prevalence(self) -> FeaturePrevalence:
+        if self.altered > self.observed:
+            raise ValueError("altered count cannot exceed observed count")
+        if (self.observed == 0) != (self.prevalence is None):
+            raise ValueError("prevalence is undefined exactly when no values were observed")
+        return self
+
+
+class FeaturePrevalenceResult(ResultContract):
+    source_snapshot_id: UUID
+    cohort_role: SourceRole
+    rows_processed: int = Field(gt=0)
+    features: tuple[FeaturePrevalence, ...]
+
+
+class ObservedPrevalenceCapability:
+    """Compute explicit per-feature binary prevalence from one adopted cohort."""
+
+    result_model: type[ResultContract] = FeaturePrevalenceResult
+
+    def __init__(self, root: Path, snapshot: SourceSnapshot) -> None:
+        self.root = root
+        self.snapshot = snapshot
+        role = snapshot.manifest.cohort_role
+        suffix = "primary" if role is SourceRole.PRIMARY else "replication"
+        phase: Literal["CAMPAIGN", "CANDIDATE"] = (
+            "CAMPAIGN" if role is SourceRole.PRIMARY else "CANDIDATE"
+        )
+        prerequisites = (
+            () if role is SourceRole.PRIMARY else ("observed.feature-prevalence-primary.v1",)
+        )
+        self.definition = Capability(
+            capability_id=f"observed.feature-prevalence.{suffix}",
+            version="1.0.0",
+            scientific_purpose="measure binary feature prevalence in an adopted cohort",
+            evidence_type_produced=f"observed.feature-prevalence-{suffix}.v1",
+            supported_phase=phase,
+            supported_scope=snapshot.manifest.cancer_scope,
+            prerequisites=prerequisites,
+            input_contract="ontojev.adopted-source-snapshot.v1",
+            output_contract=f"ontojev.feature-prevalence-{suffix}.v1",
+            expected_cost=1,
+            expected_runtime_seconds=30,
+            completeness_semantics=(
+                "all rows are processed; missing status is counted and never imputed"
+            ),
+            limitations=(
+                "descriptive association only",
+                "source cohort and assay biases remain",
+                "not causal or therapeutic evidence",
+            ),
+        )
+
+    def supports(self, campaign: Campaign) -> bool:
+        return (
+            self.snapshot.snapshot_id in campaign.source_snapshot_ids
+            and campaign.scope.program_context == self.snapshot.manifest.cancer_scope
+        )
+
+    def evidence_scope(self, campaign: Campaign) -> ScientificScope:
+        manifest = self.snapshot.manifest
+        return ScientificScope(
+            program_context=manifest.cancer_scope,
+            population=manifest.population,
+            universe=manifest.universe,
+            source_identity=manifest.source_id,
+            release_identity=manifest.release_identity,
+        )
+
+    def execute(self, offer: CapabilityOffer) -> ResultContract:
+        import csv
+        import io
+
+        from ontojev.storage.repository import ArtifactStore
+
+        if self.snapshot.snapshot_id not in offer.input_refs:
+            raise CapabilityError("offer does not bind the adopted source snapshot")
+        content = ArtifactStore(self.root).read(self.snapshot.data_ref).decode("utf-8-sig")
+        counts: dict[str, list[int]] = {}
+        seen: set[tuple[str, str]] = set()
+        rows = 0
+        positive = {"1", "true", "altered", "positive"}
+        negative = {"0", "false", "unaltered", "negative"}
+        for row in csv.DictReader(io.StringIO(content)):
+            sample = (row.get("sample_id") or "").strip()
+            feature = (row.get("feature") or "").strip()
+            key = (sample, feature)
+            if key in seen:
+                raise CapabilityError(f"duplicate sample-feature observation: {sample}/{feature}")
+            seen.add(key)
+            rows += 1
+            observed, altered, missing = counts.setdefault(feature, [0, 0, 0])
+            status = (row.get("status") or "").strip().lower()
+            if status in positive:
+                observed += 1
+                altered += 1
+            elif status in negative:
+                observed += 1
+            else:
+                missing += 1
+            counts[feature] = [observed, altered, missing]
+        features = tuple(
+            FeaturePrevalence(
+                feature=feature,
+                observed=values[0],
+                altered=values[1],
+                missing=values[2],
+                prevalence=values[1] / values[0] if values[0] else None,
+            )
+            for feature, values in sorted(counts.items())
+        )
+        if not features or not any(item.observed for item in features):
+            raise CapabilityError("source has no observed feature values")
+        return FeaturePrevalenceResult(
+            source_snapshot_id=self.snapshot.snapshot_id,
+            cohort_role=self.snapshot.manifest.cohort_role,
+            rows_processed=rows,
+            features=features,
+        )
+
+
+def operational_registry(root: Path, snapshots: Iterable[SourceSnapshot]) -> CapabilityRegistry:
+    registry = CapabilityRegistry()
+    for snapshot in snapshots:
+        registry.register(ObservedPrevalenceCapability(root, snapshot))
     return registry

@@ -30,6 +30,7 @@ class Composer:
                 raise CompositionError("duplicate evidence dimension")
             seen_types.add(item.evidence_type)
         dimensions = tuple(sorted(seen_types))
+        synthetic = all(item.evidence_type.startswith("bootstrap.") for item in evidence)
         return StatisticalState(
             campaign_id=campaign.campaign_id,
             scope=campaign.scope,
@@ -37,7 +38,11 @@ class Composer:
             evidence_dimensions=dimensions,
             current_patterns=tuple(f"validated {item}" for item in dimensions),
             contradictions=(),
-            uncertainty=("bootstrap evidence has no biological interpretation",),
+            uncertainty=(
+                ("bootstrap evidence has no biological interpretation",)
+                if synthetic
+                else tuple(sorted({note for item in evidence for note in item.uncertainty}))
+            ),
             missing_evidence=(),
-            maturity="SYNTHETIC_BOOTSTRAP",
+            maturity="SYNTHETIC_BOOTSTRAP" if synthetic else "OBSERVATIONAL_DESCRIPTIVE",
         )

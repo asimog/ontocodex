@@ -1,4 +1,4 @@
-"""The single autonomous scheduler for the synthetic bootstrap lifecycle."""
+"""The single autonomous scheduler for synthetic and adopted-source research."""
 
 from __future__ import annotations
 
@@ -14,7 +14,12 @@ from ontojev.candidates.lifecycle import (
     initial_evidence_state,
     revise_evidence_state,
 )
-from ontojev.capabilities.registry import CapabilityRegistry, bootstrap_registry
+from ontojev.capabilities.registry import (
+    CapabilityRegistry,
+    bootstrap_registry,
+    evidence_scope,
+    operational_registry,
+)
 from ontojev.domain.models import (
     Campaign,
     Candidate,
@@ -26,8 +31,11 @@ from ontojev.domain.models import (
     EvidenceState,
     ExecuteCapabilityDecision,
     ExecuteFollowUpDecision,
+    FinalCandidateResult,
     FinalizeCandidateDecision,
+    Hypothesis,
     InvestigateCandidateDecision,
+    LiteratureContext,
     OntoCodexInvocation,
     Provenance,
     ProvenanceCategory,
@@ -40,13 +48,20 @@ from ontojev.domain.models import (
     RunStatus,
     ScientificEvidence,
     ScientificScope,
+    SourceRole,
+    SourceSnapshot,
     StartCampaignDecision,
     StatisticalState,
     WideDecision,
     utc_now,
 )
 from ontojev.dossier.renderer import DossierRenderer
-from ontojev.jev.evaluators import DeepEvaluator, WideEvaluator
+from ontojev.jev.evaluators import (
+    DeepEvaluator,
+    DeepEvaluatorProtocol,
+    WideEvaluator,
+    WideEvaluatorProtocol,
+)
 from ontojev.ontocodex.director import (
     DeterministicDirector,
     Director,
@@ -69,16 +84,29 @@ class Scheduler:
         *,
         registry: CapabilityRegistry | None = None,
         director: Director | None = None,
+        wide_evaluator: WideEvaluatorProtocol | None = None,
+        deep_evaluator: DeepEvaluatorProtocol | None = None,
         limits: RuntimeLimits | None = None,
     ) -> None:
         self.repository = Repository(root)
-        self.registry = registry or bootstrap_registry()
+        active_programs = tuple(
+            item for item in self.repository.list_latest("program", ResearchProgram) if item.active
+        )
+        source_ids = active_programs[0].source_snapshot_ids if len(active_programs) == 1 else ()
+        snapshots = tuple(
+            item
+            for item in self.repository.list_latest("source_snapshot", SourceSnapshot)
+            if item.snapshot_id in source_ids
+        )
+        self.registry = registry or (
+            operational_registry(root, snapshots) if snapshots else bootstrap_registry()
+        )
         self.director = director or DeterministicDirector()
         self.limits = limits or RuntimeLimits()
         self.executor = BoundedExecutor(self.limits)
         self.composer = Composer()
-        self.wide = WideEvaluator()
-        self.deep = DeepEvaluator()
+        self.wide = wide_evaluator or WideEvaluator()
+        self.deep = deep_evaluator or DeepEvaluator()
         self.admission = AdmissionPolicy()
         self.stage8 = Stage8()
         self.renderer = DossierRenderer()
@@ -87,11 +115,15 @@ class Scheduler:
         programs = self.repository.list_latest("program", ResearchProgram)
         portfolios = self.repository.list_latest("portfolio", ResearchPortfolio)
         if programs or portfolios:
-            if len(programs) != 1 or len(portfolios) != 1:
+            active = tuple(item for item in programs if item.active)
+            if len(active) != 1:
+                raise DecisionValidationError("runtime requires exactly one active ResearchProgram")
+            owned = tuple(item for item in portfolios if item.program_id == active[0].program_id)
+            if len(owned) != 1:
                 raise DecisionValidationError(
-                    "bootstrap requires exactly one Program and Portfolio"
+                    "active ResearchProgram requires exactly one Portfolio"
                 )
-            return programs[0], portfolios[0]
+            return active[0], owned[0]
         program = ResearchProgram(
             name="Cancer-general synthetic bootstrap",
             purpose="prove evidence-neutral autonomous research architecture",
@@ -163,7 +195,12 @@ class Scheduler:
             None,
         )
         campaign_offers = (
-            self.registry.offers(campaign, evidence, phase="CAMPAIGN")
+            self.registry.offers(
+                campaign,
+                evidence,
+                phase="CAMPAIGN",
+                input_refs=tuple(str(item) for item in campaign.source_snapshot_ids),
+            )
             if campaign and state is None
             else ()
         )
@@ -172,7 +209,8 @@ class Scheduler:
                 campaign,
                 evidence,
                 phase="CANDIDATE",
-                input_refs=(str(evidence_state.evidence_state_id),),
+                input_refs=tuple(str(item) for item in campaign.source_snapshot_ids)
+                + (str(evidence_state.evidence_state_id),),
             )
             if campaign and candidate and evidence_state and deep_decision
             else ()
@@ -260,15 +298,41 @@ class Scheduler:
                 or decision.question_id != context.active_question.question_id
             ):
                 raise DecisionValidationError("Campaign decision targets a non-active question")
-            campaign = Campaign(
-                question_id=decision.question_id,
-                scope=ScientificScope(
+            if context.program.synthetic:
+                scope = ScientificScope(
                     program_context="cancer-general synthetic bootstrap",
                     population="synthetic population",
                     universe="synthetic entities",
                     source_identity="deterministic bootstrap source",
                     release_identity="bootstrap-1",
-                ),
+                )
+            else:
+                snapshots = self.repository.list_latest("source_snapshot", SourceSnapshot)
+                primary = next(
+                    (
+                        item
+                        for item in snapshots
+                        if item.snapshot_id in context.program.source_snapshot_ids
+                        and item.manifest.cohort_role is SourceRole.PRIMARY
+                    ),
+                    None,
+                )
+                if primary is None:
+                    raise DecisionValidationError(
+                        "observational Campaign requires a PRIMARY source"
+                    )
+                manifest = primary.manifest
+                scope = ScientificScope(
+                    program_context=context.program.cancer_scope,
+                    population=manifest.population,
+                    universe=manifest.universe,
+                    source_identity=manifest.source_id,
+                    release_identity=manifest.release_identity,
+                )
+            campaign = Campaign(
+                question_id=decision.question_id,
+                scope=scope,
+                source_snapshot_ids=context.program.source_snapshot_ids,
             )
             self.repository.save("campaign", campaign.campaign_id, campaign)
             return campaign.campaign_id
@@ -299,6 +363,28 @@ class Scheduler:
             self.repository.save("candidate", candidate.candidate_id, candidate)
             evidence_state = initial_evidence_state(candidate, context.statistical_state)
             self.repository.save("evidence_state", evidence_state.evidence_state_id, evidence_state)
+            hypothesis = Hypothesis(
+                candidate_id=candidate.candidate_id,
+                triggering_evidence=context.statistical_state.evidence_refs,
+                statement=(
+                    "The admitted descriptive feature pattern is reproducible in an "
+                    "independent adopted cohort."
+                ),
+                alternatives=(
+                    "the pattern is cohort-specific",
+                    "the pattern reflects source or assay bias",
+                ),
+                discriminating_observation=(
+                    "independent-cohort prevalence with explicit missingness"
+                ),
+                required_evidence=("registered replication capability result",),
+                executable_test="observed.feature-prevalence.replication",
+                strengthening_outcome=(
+                    "directionally consistent prevalence in the replication cohort"
+                ),
+                weakening_outcome=("absence or reversal after accounting for missing observations"),
+            )
+            self.repository.save("hypothesis", hypothesis.hypothesis_id, hypothesis)
             return candidate.candidate_id
         if isinstance(decision, InvestigateCandidateDecision):
             if not context.candidate or decision.candidate_id != context.candidate.candidate_id:
@@ -320,9 +406,14 @@ class Scheduler:
                 or decision.question_id != context.active_question.question_id
             ):
                 raise DecisionValidationError("completion targets a stale question")
-            answered = context.active_question.model_copy(
-                update={"status": QuestionStatus.ANSWERED}
-            )
+            status = QuestionStatus.ANSWERED
+            if context.dossier is not None:
+                final = self.repository.load_latest(
+                    "final_result", context.dossier.final_result_id, FinalCandidateResult
+                )
+                if final is not None and final.disposition == "DEFERRED":
+                    status = QuestionStatus.DEFERRED
+            answered = context.active_question.model_copy(update={"status": status})
             self.repository.save("question", answered.question_id, answered)
             return answered.question_id
         raise DecisionValidationError(f"unsupported decision {type(decision).__name__}")
@@ -340,9 +431,10 @@ class Scheduler:
         if not isinstance(offer, CapabilityOffer) or context.campaign is None:
             raise DecisionValidationError("capability execution lacks a valid offer or Campaign")
         extra_refs = (
-            (str(context.evidence_state.evidence_state_id),)
+            tuple(str(item) for item in context.campaign.source_snapshot_ids)
+            + (str(context.evidence_state.evidence_state_id),)
             if phase == "CANDIDATE" and context.evidence_state
-            else ()
+            else tuple(str(item) for item in context.campaign.source_snapshot_ids)
         )
         capability = self.registry.validate_offer(
             offer, context.campaign, context.evidence, phase=phase, input_refs=extra_refs
@@ -357,10 +449,14 @@ class Scheduler:
             capability_id=definition.capability_id,
             method_version=definition.version,
             campaign_id=context.campaign.campaign_id,
-            scope=context.campaign.scope,
+            scope=evidence_scope(capability, context.campaign),
             result_ref=result_ref,
             completeness=result.completeness,
-            uncertainty=("deterministic synthetic output",),
+            uncertainty=(
+                ("deterministic synthetic output",)
+                if context.program.synthetic
+                else ("descriptive estimate; source missingness and cohort bias remain",)
+            ),
             provenance=Provenance(
                 category=ProvenanceCategory.DETERMINISTICALLY_DERIVED,
                 producer_id=definition.capability_id,
@@ -422,6 +518,16 @@ class Scheduler:
         configuration = hashlib.sha256(
             f"{self.limits.timeout_seconds}:{self.limits.finalization_reserve_seconds}".encode()
         ).hexdigest()
+        literature = tuple(
+            item
+            for item in self.repository.list_latest("literature_context", LiteratureContext)
+            if item.program_id == context.program.program_id
+        )
+        hypotheses = tuple(
+            item
+            for item in self.repository.list_latest("hypothesis", Hypothesis)
+            if item.candidate_id == context.candidate.candidate_id
+        )
         dossier = DossierMetadata(
             program_id=context.program.program_id,
             portfolio_id=context.portfolio.portfolio_id,
@@ -435,11 +541,19 @@ class Scheduler:
             evidence_state_ids=tuple(item.evidence_state_id for item in history),
             judgment_refs=tuple(item.decision_id for item in wide)
             + (context.deep_decision.decision_id,),
-            uncertainty=("synthetic bootstrap evidence has no biological interpretation",),
+            uncertainty=(
+                ("synthetic bootstrap evidence has no biological interpretation",)
+                if context.program.synthetic
+                else ("descriptive computational evidence; uncertainty is not clinical validity",)
+            ),
             limitations=final.limitations,
             stopping_rationale=final.stopping_rationale,
             software_identity=f"ontojev-{__version__}",
             configuration_identity=configuration,
+            source_snapshot_ids=context.campaign.source_snapshot_ids,
+            literature_context_ids=tuple(item.literature_id for item in literature),
+            hypothesis_ids=tuple(item.hypothesis_id for item in hypotheses),
+            synthetic=context.program.synthetic,
         )
         json_ref = self.repository.artifacts.publish_bytes(
             self.renderer.render_json(dossier), media_type="application/json", suffix=".json"

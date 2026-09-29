@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def new_id() -> UUID:
@@ -50,6 +50,11 @@ class QuestionStatus(StrEnum):
     ANSWERED = "ANSWERED"
     DEFERRED = "DEFERRED"
     EXHAUSTED = "EXHAUSTED"
+
+
+class SourceRole(StrEnum):
+    PRIMARY = "PRIMARY"
+    REPLICATION = "REPLICATION"
 
 
 class ArtifactRef(Contract):
@@ -98,6 +103,9 @@ class ResearchProgram(Contract):
     name: str
     purpose: str
     active: bool = True
+    cancer_scope: str = "cancer-general"
+    synthetic: bool = True
+    source_snapshot_ids: tuple[UUID, ...] = ()
 
 
 class ResearchPortfolio(Contract):
@@ -118,7 +126,69 @@ class Campaign(Contract):
     campaign_id: UUID = Field(default_factory=new_id)
     question_id: UUID
     scope: ScientificScope
+    source_snapshot_ids: tuple[UUID, ...] = ()
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class SourceManifest(Contract):
+    source_id: str
+    title: str
+    source_uri: str
+    citation: str
+    license: str
+    release_identity: str
+    cancer_scope: str
+    population: str
+    universe: str
+    cohort_role: SourceRole
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    required_columns: tuple[str, ...] = ("sample_id", "feature", "status")
+
+    @model_validator(mode="after")
+    def require_attribution_and_contract_columns(self) -> SourceManifest:
+        attributed = (
+            self.source_id,
+            self.title,
+            self.source_uri,
+            self.citation,
+            self.license,
+            self.release_identity,
+            self.cancer_scope,
+            self.population,
+            self.universe,
+        )
+        if any(not value.strip() for value in attributed):
+            raise ValueError("source attribution and scope fields must be non-empty")
+        required = {"sample_id", "feature", "status"}
+        if not required.issubset(self.required_columns):
+            raise ValueError("source contract must retain sample_id, feature, and status")
+        return self
+
+
+class SourceSnapshot(Contract):
+    snapshot_id: UUID = Field(default_factory=new_id)
+    manifest: SourceManifest
+    data_ref: ArtifactRef
+    row_count: int = Field(gt=0)
+    observed_rows: int = Field(ge=0)
+    missing_rows: int = Field(ge=0)
+    imported_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def account_for_every_row(self) -> SourceSnapshot:
+        if self.observed_rows + self.missing_rows != self.row_count:
+            raise ValueError("observed and missing counts must account for every row")
+        return self
+
+
+class LiteratureContext(Contract):
+    literature_id: UUID = Field(default_factory=new_id)
+    program_id: UUID
+    citation: str
+    persistent_id: str
+    relevance: str
+    artifact_ref: ArtifactRef
+    provenance: Provenance
 
 
 class ResearchRun(Contract):
@@ -299,7 +369,10 @@ class DossierMetadata(Contract):
     stopping_rationale: str
     software_identity: str
     configuration_identity: str
-    synthetic: Literal[True] = True
+    source_snapshot_ids: tuple[UUID, ...] = ()
+    literature_context_ids: tuple[UUID, ...] = ()
+    hypothesis_ids: tuple[UUID, ...] = ()
+    synthetic: bool = True
 
 
 class CapabilityGap(Contract):
@@ -316,6 +389,33 @@ class EngineeringTask(Contract):
     gap_id: UUID
     status: Literal["PROPOSED", "VERIFIED", "ACTIVATED", "REJECTED"] = "PROPOSED"
     verified_tree_identity: str | None = None
+    package_ref: ArtifactRef | None = None
+    verification_ref: ArtifactRef | None = None
+
+
+class CapabilityPackageManifest(Contract):
+    capability_id: str
+    version: str
+    output_contract: str
+    package_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    verification_command: tuple[str, ...]
+    verification_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    limitations: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def require_verification_command(self) -> CapabilityPackageManifest:
+        if not self.verification_command or any(not item for item in self.verification_command):
+            raise ValueError("verification command must be explicit")
+        return self
+
+
+class ObservatorySnapshot(Contract):
+    generated_at: datetime = Field(default_factory=utc_now)
+    counts: dict[str, int]
+    active_question_id: UUID | None
+    active_campaign_id: UUID | None
+    latest_run_status: RunStatus | None
+    integrity_errors: tuple[str, ...]
 
 
 class CreateQuestionDecision(Contract):

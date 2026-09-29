@@ -171,6 +171,22 @@ class Repository:
                 ),
             )
 
+    def list_artifacts(self) -> tuple[ArtifactRef, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT artifact_id, sha256, media_type, relative_path FROM artifacts "
+                "ORDER BY created_at, artifact_id"
+            ).fetchall()
+        return tuple(
+            ArtifactRef(
+                artifact_id=UUID(row["artifact_id"]),
+                sha256=row["sha256"],
+                media_type=row["media_type"],
+                relative_path=row["relative_path"],
+            )
+            for row in rows
+        )
+
     def recover_running_runs(self) -> int:
         recovered = 0
         for run in self.list_latest("research_run", ResearchRun):

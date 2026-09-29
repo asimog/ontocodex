@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Protocol
 
 from ontojev.domain.models import (
     Candidate,
@@ -23,6 +23,14 @@ def _fake_provenance(producer: str) -> Provenance:
     )
 
 
+class WideEvaluatorProtocol(Protocol):
+    def evaluate(self, state: StatisticalState) -> tuple[WideDecision, ...]: ...
+
+
+class DeepEvaluatorProtocol(Protocol):
+    def evaluate(self, candidate: Candidate, evidence_state: EvidenceState) -> DeepDecision: ...
+
+
 class WideEvaluator:
     def evaluate(self, state: StatisticalState) -> tuple[WideDecision, ...]:
         if not state.evidence_refs:
@@ -36,13 +44,18 @@ class WideEvaluator:
                     provenance=_fake_provenance("fake-wide"),
                 ),
             )
+        synthetic = state.maturity == "SYNTHETIC_BOOTSTRAP"
         return (
             WideDecision(
                 state_id=state.state_id,
                 question_id="evidence-coherence",
                 score=0.9,
                 disposition="ADMIT",
-                rationale="heterogeneous synthetic evidence is complete and compatible",
+                rationale=(
+                    "heterogeneous synthetic evidence is complete and compatible"
+                    if synthetic
+                    else "adopted descriptive evidence is complete and scope-compatible"
+                ),
                 provenance=_fake_provenance("fake-wide"),
             ),
             WideDecision(
@@ -50,7 +63,11 @@ class WideEvaluator:
                 question_id="value-of-deeper-investigation",
                 score=0.8,
                 disposition="ADMIT",
-                rationale="bootstrap lifecycle requires Candidate investigation",
+                rationale=(
+                    "bootstrap lifecycle requires Candidate investigation"
+                    if synthetic
+                    else "independent replication can test the descriptive pattern"
+                ),
                 provenance=_fake_provenance("fake-wide"),
             ),
         )

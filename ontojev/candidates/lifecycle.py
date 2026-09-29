@@ -32,16 +32,23 @@ class AdmissionPolicy:
 
 
 def initial_evidence_state(candidate: Candidate, state: StatisticalState) -> EvidenceState:
+    synthetic = state.maturity == "SYNTHETIC_BOOTSTRAP"
     return EvidenceState(
         candidate_id=candidate.candidate_id,
         revision=0,
         previous_evidence_state_id=None,
         evidence_refs=state.evidence_refs,
-        findings=("admitted from compatible synthetic StatisticalState",),
+        findings=(
+            (
+                "admitted from compatible synthetic StatisticalState"
+                if synthetic
+                else "admitted from compatible descriptive StatisticalState"
+            ),
+        ),
         contradictions=state.contradictions,
         unresolved_gaps=("robustness",),
         judgment_refs=candidate.admission_decision_ids,
-        maturity="SYNTHETIC_CANDIDATE",
+        maturity="SYNTHETIC_CANDIDATE" if synthetic else "OBSERVATIONAL_CANDIDATE",
     )
 
 
@@ -50,16 +57,26 @@ def revise_evidence_state(
 ) -> EvidenceState:
     if deep.evidence_state_id != previous.evidence_state_id or deep.next_move != "FOLLOW_UP":
         raise CandidateLifecycleError("follow-up is not authorized by the current Deep decision")
+    synthetic = previous.maturity.startswith("SYNTHETIC")
     return EvidenceState(
         candidate_id=previous.candidate_id,
         revision=previous.revision + 1,
         previous_evidence_state_id=previous.evidence_state_id,
         evidence_refs=(*previous.evidence_refs, evidence.evidence_id),
-        findings=(*previous.findings, "synthetic follow-up resolved the robustness gap"),
+        findings=(
+            *previous.findings,
+            (
+                "synthetic follow-up resolved the robustness gap"
+                if synthetic
+                else "independent-cohort replication addressed the robustness gap"
+            ),
+        ),
         contradictions=previous.contradictions,
         unresolved_gaps=(),
         judgment_refs=(*previous.judgment_refs, deep.decision_id),
-        maturity="SYNTHETIC_FOLLOW_UP_COMPLETE",
+        maturity=(
+            "SYNTHETIC_FOLLOW_UP_COMPLETE" if synthetic else "OBSERVATIONAL_REPLICATION_COMPLETE"
+        ),
     )
 
 
@@ -80,14 +97,37 @@ class Stage8:
             if revision.previous_evidence_state_id != expected_parent:
                 raise CandidateLifecycleError("EvidenceState lineage is broken")
         final = revisions[-1]
-        if final.unresolved_gaps or deep_decision.evidence_state_id != final.evidence_state_id:
+        if deep_decision.evidence_state_id != final.evidence_state_id:
+            raise CandidateLifecycleError("Deep decision does not target the final revision")
+        if deep_decision.next_move == "DEFER":
+            return FinalCandidateResult(
+                candidate_id=candidate.candidate_id,
+                final_evidence_state_id=final.evidence_state_id,
+                disposition="DEFERRED",
+                stopping_rationale="Deep judgment deferred the bounded computational case",
+                limitations=("unresolved evidence gaps remain", "not therapeutic validation"),
+            )
+        if final.unresolved_gaps:
             raise CandidateLifecycleError("Candidate is not ready for Stage 8")
         if deep_decision.next_move != "FINALIZE":
             raise CandidateLifecycleError("Deep has not selected finalization")
+        synthetic = final.maturity.startswith("SYNTHETIC")
         return FinalCandidateResult(
             candidate_id=candidate.candidate_id,
             final_evidence_state_id=final.evidence_state_id,
             disposition="COMPUTATIONAL_CASE_COMPLETE",
-            stopping_rationale="deterministic bootstrap lifecycle completed",
-            limitations=("synthetic evidence only", "not a therapeutic validation"),
+            stopping_rationale=(
+                "deterministic bootstrap lifecycle completed"
+                if synthetic
+                else "registered primary and independent replication analyses completed"
+            ),
+            limitations=(
+                ("synthetic evidence only", "not a therapeutic validation")
+                if synthetic
+                else (
+                    "descriptive association only",
+                    "cohort and assay biases remain",
+                    "not clinical or therapeutic validation",
+                )
+            ),
         )

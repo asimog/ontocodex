@@ -23,4 +23,8 @@
 21. A normal ResearchRun has a 600-second hard maximum.
 22. Temporary raw data is removed only after required durable output exists.
 23. Research-control judgments never count as biological evidence.
+24. Adopted sources require citation, license, release identity, scope, and content digest.
+25. Missing source values are counted explicitly and never imputed by the prevalence method.
+26. Replication uses a separately adopted cohort and a Candidate-phase capability.
+27. Engineering verification can register packages but cannot dynamically import them.
 

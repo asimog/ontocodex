@@ -1,4 +1,4 @@
-"""Synthetic dossier rendering."""
+"""Dossier rendering for synthetic and operator-adopted evidence."""
 
 from __future__ import annotations
 
@@ -14,10 +14,16 @@ class DossierRenderer:
         ).encode()
 
     def render_markdown(self, dossier: DossierMetadata) -> bytes:
+        title = "Synthetic OntoJev Dossier" if dossier.synthetic else "OntoJev Dossier"
+        notice = (
+            "Bootstrap-only computational evidence. Not therapeutic validation."
+            if dossier.synthetic
+            else "Descriptive computational evidence. Not clinical or therapeutic validation."
+        )
         lines = [
-            "# Synthetic OntoJev Dossier",
+            f"# {title}",
             "",
-            "> Bootstrap-only computational evidence. Not therapeutic validation.",
+            f"> {notice}",
             "",
             f"- Dossier: `{dossier.dossier_id}`",
             f"- Program: `{dossier.program_id}`",
@@ -27,6 +33,9 @@ class DossierRenderer:
             f"- Final result: `{dossier.final_result_id}`",
             f"- Evidence items: {len(dossier.evidence_refs)}",
             f"- EvidenceState revisions: {len(dossier.evidence_state_ids)}",
+            f"- Adopted source snapshots: {len(dossier.source_snapshot_ids)}",
+            f"- Literature contexts: {len(dossier.literature_context_ids)}",
+            f"- Hypotheses: {len(dossier.hypothesis_ids)}",
             f"- Stopping rationale: {dossier.stopping_rationale}",
             "",
             "## Uncertainty",

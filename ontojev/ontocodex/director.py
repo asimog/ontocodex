@@ -164,7 +164,7 @@ def validate_decision(decision: OntoCodexDecision, context: DirectorContext) -> 
         valid = (
             candidate is not None
             and context.deep_decision is not None
-            and context.deep_decision.next_move == "FINALIZE"
+            and context.deep_decision.next_move in {"FINALIZE", "DEFER"}
             and context.dossier is None
             and decision.candidate_id == candidate.candidate_id
         )
@@ -197,9 +197,17 @@ class DeterministicDirector:
     def decide(self, context: DirectorContext) -> OntoCodexDecision:
         question = context.active_question
         if question is None:
-            decision: OntoCodexDecision = CreateQuestionDecision(
-                question=f"Synthetic research question {len(context.portfolio.question_ids) + 1}"
+            sequence = len(context.portfolio.question_ids) + 1
+            question_text = (
+                f"Synthetic research question {sequence}"
+                if context.program.synthetic
+                else (
+                    f"Which adopted descriptive feature patterns in "
+                    f"{context.program.cancer_scope} warrant independent replication? "
+                    f"Question {sequence}."
+                )
             )
+            decision: OntoCodexDecision = CreateQuestionDecision(question=question_text)
         elif context.campaign is None:
             decision = StartCampaignDecision(question_id=question.question_id)
         elif context.statistical_state is None:

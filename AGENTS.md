@@ -72,6 +72,9 @@
 - Put durable ownership in `storage/`.
 - Put Candidate and Stage 8 logic in `candidates/`.
 - Put rendering in `dossier/`.
+- Put adopted data preflight in `sources/`.
+- Put isolated package promotion in `engineering/`.
+- Keep Observatory read-only in `observatory.py`.
 - Do not create empty modules to imitate a diagram.
 
 ## Development
