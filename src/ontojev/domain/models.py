@@ -1,0 +1,365 @@
+"""Immutable, evidence-neutral contracts for the OntoJev bootstrap."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Annotated, Any, Literal
+from uuid import UUID, uuid4
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def new_id() -> UUID:
+    return uuid4()
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+class Contract(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    schema_version: int = 1
+
+
+class ProvenanceCategory(StrEnum):
+    OBSERVED = "OBSERVED"
+    DETERMINISTICALLY_DERIVED = "DETERMINISTICALLY_DERIVED"
+    JEV_JUDGMENT = "JEV_JUDGMENT"
+    ONTOCODEX_SCIENTIFIC_JUDGMENT = "ONTOCODEX_SCIENTIFIC_JUDGMENT"
+    EXTERNAL_LITERATURE_CONTEXT = "EXTERNAL_LITERATURE_CONTEXT"
+
+
+class Completeness(StrEnum):
+    PARTIAL = "PARTIAL"
+    COMPLETE = "COMPLETE"
+
+
+class RunStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    TIMED_OUT = "TIMED_OUT"
+    INTERRUPTED = "INTERRUPTED"
+
+
+class QuestionStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    ANSWERED = "ANSWERED"
+    DEFERRED = "DEFERRED"
+    EXHAUSTED = "EXHAUSTED"
+
+
+class ArtifactRef(Contract):
+    artifact_id: UUID = Field(default_factory=new_id)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    media_type: str
+    relative_path: str
+
+
+class ScientificScope(Contract):
+    scope_id: UUID = Field(default_factory=new_id)
+    program_context: str
+    population: str
+    universe: str
+    source_identity: str
+    release_identity: str
+
+    @property
+    def compatibility_key(self) -> tuple[str, str, str, str, str]:
+        return (
+            self.program_context,
+            self.population,
+            self.universe,
+            self.source_identity,
+            self.release_identity,
+        )
+
+
+class Provenance(Contract):
+    category: ProvenanceCategory
+    producer_id: str
+    producer_version: str
+    created_at: datetime = Field(default_factory=utc_now)
+    input_refs: tuple[UUID, ...] = ()
+
+    @field_validator("created_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("timestamps must be timezone-aware")
+        return value
+
+
+class ResearchProgram(Contract):
+    program_id: UUID = Field(default_factory=new_id)
+    name: str
+    purpose: str
+    active: bool = True
+
+
+class ResearchPortfolio(Contract):
+    portfolio_id: UUID = Field(default_factory=new_id)
+    program_id: UUID
+    question_ids: tuple[UUID, ...] = ()
+    revision: int = 0
+
+
+class ResearchQuestion(Contract):
+    question_id: UUID = Field(default_factory=new_id)
+    portfolio_id: UUID
+    question: str
+    status: QuestionStatus = QuestionStatus.ACTIVE
+
+
+class Campaign(Contract):
+    campaign_id: UUID = Field(default_factory=new_id)
+    question_id: UUID
+    scope: ScientificScope
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ResearchRun(Contract):
+    run_id: UUID = Field(default_factory=new_id)
+    campaign_id: UUID | None = None
+    decision_kind: str
+    status: RunStatus = RunStatus.PENDING
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    outcome_ref: UUID | None = None
+    error: str | None = None
+
+
+class Capability(Contract):
+    capability_id: str
+    version: str
+    scientific_purpose: str
+    evidence_type_produced: str
+    supported_phase: Literal["CAMPAIGN", "CANDIDATE"]
+    supported_scope: str
+    prerequisites: tuple[str, ...]
+    input_contract: str
+    output_contract: str
+    expected_cost: int = Field(ge=0)
+    expected_runtime_seconds: float = Field(gt=0)
+    completeness_semantics: str
+    limitations: tuple[str, ...]
+
+
+class CapabilityOffer(Contract):
+    offer_id: UUID = Field(default_factory=new_id)
+    capability_id: str
+    capability_version: str
+    campaign_id: UUID
+    scope_id: UUID
+    phase: Literal["CAMPAIGN", "CANDIDATE"]
+    input_refs: tuple[UUID, ...]
+    offer_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CapabilityResult(Contract):
+    result_id: UUID = Field(default_factory=new_id)
+    capability_id: str
+    capability_version: str
+    output_contract: str
+    payload: dict[str, Any]
+    completeness: Completeness
+    limitations: tuple[str, ...] = ()
+
+
+class ScientificEvidence(Contract):
+    evidence_id: UUID = Field(default_factory=new_id)
+    evidence_type: str
+    capability_id: str
+    method_version: str
+    campaign_id: UUID
+    scope: ScientificScope
+    result_ref: ArtifactRef
+    completeness: Completeness
+    uncertainty: tuple[str, ...]
+    provenance: Provenance
+    limitations: tuple[str, ...]
+
+
+class StatisticalState(Contract):
+    state_id: UUID = Field(default_factory=new_id)
+    campaign_id: UUID
+    scope: ScientificScope
+    evidence_refs: tuple[UUID, ...]
+    evidence_dimensions: tuple[str, ...]
+    current_patterns: tuple[str, ...]
+    contradictions: tuple[str, ...]
+    uncertainty: tuple[str, ...]
+    missing_evidence: tuple[str, ...]
+    maturity: str
+    previous_state_id: UUID | None = None
+
+
+class WideDecision(Contract):
+    decision_id: UUID = Field(default_factory=new_id)
+    state_id: UUID
+    question_id: str
+    score: float = Field(ge=0, le=1)
+    disposition: Literal["ADMIT", "DEFER", "REJECT", "ABSTAIN"]
+    rationale: str
+    provenance: Provenance
+
+
+class Candidate(Contract):
+    candidate_id: UUID = Field(default_factory=new_id)
+    campaign_id: UUID
+    source_state_id: UUID
+    admission_decision_ids: tuple[UUID, ...]
+    admitted_at: datetime = Field(default_factory=utc_now)
+
+
+class EvidenceState(Contract):
+    evidence_state_id: UUID = Field(default_factory=new_id)
+    candidate_id: UUID
+    revision: int
+    previous_evidence_state_id: UUID | None
+    evidence_refs: tuple[UUID, ...]
+    findings: tuple[str, ...]
+    contradictions: tuple[str, ...]
+    unresolved_gaps: tuple[str, ...]
+    judgment_refs: tuple[UUID, ...]
+    maturity: str
+
+
+class DeepDecision(Contract):
+    decision_id: UUID = Field(default_factory=new_id)
+    evidence_state_id: UUID
+    next_move: Literal["FOLLOW_UP", "HYPOTHESIS", "REPLICATE", "FINALIZE", "DEFER"]
+    rationale: str
+    provenance: Provenance
+
+
+class JevDecision(Contract):
+    decision_id: UUID = Field(default_factory=new_id)
+    role: Literal["RESEARCH_CONTROL", "SCIENTIFIC_EVALUATION"]
+    contract_id: str
+    contract_version: str
+    outcome: str
+    provenance: Provenance
+
+
+class Hypothesis(Contract):
+    hypothesis_id: UUID = Field(default_factory=new_id)
+    candidate_id: UUID
+    triggering_evidence: tuple[UUID, ...]
+    statement: str
+    alternatives: tuple[str, ...]
+    discriminating_observation: str
+    required_evidence: tuple[str, ...]
+    executable_test: str | None
+    strengthening_outcome: str
+    weakening_outcome: str
+
+
+class FinalCandidateResult(Contract):
+    result_id: UUID = Field(default_factory=new_id)
+    candidate_id: UUID
+    final_evidence_state_id: UUID
+    disposition: Literal["COMPUTATIONAL_CASE_COMPLETE", "DEFERRED", "EXHAUSTED"]
+    stopping_rationale: str
+    limitations: tuple[str, ...]
+
+
+class DossierMetadata(Contract):
+    dossier_id: UUID = Field(default_factory=new_id)
+    program_id: UUID
+    portfolio_id: UUID
+    question_id: UUID
+    campaign_id: UUID
+    candidate_id: UUID
+    final_result_id: UUID
+    run_ids: tuple[UUID, ...]
+    evidence_refs: tuple[UUID, ...]
+    statistical_state_ids: tuple[UUID, ...]
+    evidence_state_ids: tuple[UUID, ...]
+    judgment_refs: tuple[UUID, ...]
+    uncertainty: tuple[str, ...]
+    limitations: tuple[str, ...]
+    stopping_rationale: str
+    software_identity: str
+    configuration_identity: str
+    synthetic: Literal[True] = True
+
+
+class CapabilityGap(Contract):
+    gap_id: UUID = Field(default_factory=new_id)
+    question_id: UUID
+    scientific_need: str
+    missing_capability: str
+    required_evidence_or_method: str
+    existing_capability_limit: str
+
+
+class EngineeringTask(Contract):
+    task_id: UUID = Field(default_factory=new_id)
+    gap_id: UUID
+    status: Literal["PROPOSED", "VERIFIED", "ACTIVATED", "REJECTED"] = "PROPOSED"
+    verified_tree_identity: str | None = None
+
+
+class CreateQuestionDecision(Contract):
+    kind: Literal["CREATE_QUESTION"] = "CREATE_QUESTION"
+    question: str
+
+
+class StartCampaignDecision(Contract):
+    kind: Literal["START_CAMPAIGN"] = "START_CAMPAIGN"
+    question_id: UUID
+
+
+class ExecuteCapabilityDecision(Contract):
+    kind: Literal["EXECUTE_CAPABILITY"] = "EXECUTE_CAPABILITY"
+    offer: CapabilityOffer
+
+
+class ComposeEvidenceDecision(Contract):
+    kind: Literal["COMPOSE_EVIDENCE"] = "COMPOSE_EVIDENCE"
+    campaign_id: UUID
+    evidence_refs: tuple[UUID, ...]
+
+
+class RequestWideDecision(Contract):
+    kind: Literal["REQUEST_WIDE"] = "REQUEST_WIDE"
+    state_id: UUID
+
+
+class InvestigateCandidateDecision(Contract):
+    kind: Literal["INVESTIGATE_CANDIDATE"] = "INVESTIGATE_CANDIDATE"
+    candidate_id: UUID
+
+
+class ExecuteFollowUpDecision(Contract):
+    kind: Literal["EXECUTE_FOLLOW_UP"] = "EXECUTE_FOLLOW_UP"
+    candidate_id: UUID
+    offer: CapabilityOffer
+
+
+class FinalizeCandidateDecision(Contract):
+    kind: Literal["FINALIZE_CANDIDATE"] = "FINALIZE_CANDIDATE"
+    candidate_id: UUID
+
+
+class CompleteQuestionDecision(Contract):
+    kind: Literal["COMPLETE_QUESTION"] = "COMPLETE_QUESTION"
+    question_id: UUID
+
+
+type OntoCodexDecision = Annotated[
+    CreateQuestionDecision
+    | StartCampaignDecision
+    | ExecuteCapabilityDecision
+    | ComposeEvidenceDecision
+    | RequestWideDecision
+    | InvestigateCandidateDecision
+    | ExecuteFollowUpDecision
+    | FinalizeCandidateDecision
+    | CompleteQuestionDecision,
+    Field(discriminator="kind"),
+]
